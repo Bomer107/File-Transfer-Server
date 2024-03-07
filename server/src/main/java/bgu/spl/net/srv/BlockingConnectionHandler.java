@@ -43,6 +43,8 @@ public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler
             ex.printStackTrace();
         }
 
+        //if the client closes the socket, the handler stays in the connections.
+
     }
 
     @Override

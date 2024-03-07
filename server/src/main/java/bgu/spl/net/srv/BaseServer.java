@@ -35,9 +35,8 @@ public abstract class BaseServer<T> implements Server<T> {
 
     @Override
     public void serve() {
-
         try (ServerSocket serverSock = new ServerSocket(port)) {
-            ++id;
+            
 			System.out.println("Server started");
 
             this.sock = serverSock; //just to be able to close
@@ -45,6 +44,8 @@ public abstract class BaseServer<T> implements Server<T> {
             while (!Thread.currentThread().isInterrupted()) {
 
                 Socket clientSock = serverSock.accept();
+
+                ++id;
 
                 BidiMessagingProtocol<T> protocol = protocolFactory.get();
                 protocol.start(id, connections);
