@@ -10,6 +10,28 @@
 .idea/**/dictionaries
 .idea/**/shelf
 
+.devcontainer/
+server/Flies
+server/src/main/java/bgu/spl/net/api
+server/src/main/java/bgu/spl/net/srv/Connections.java
+server/src/main/java/bgu/spl/net/srv/Server.java
+server/src/main/java/bgu/spl/net/srv/ConnectionHandler.java
+server/src/main/java/bgu/spl/net/impl/echo/
+server/src/main/java/bgu/spl/net/impl/newsfeed/
+server/src/main/java/bgu/spl/net/impl/rci/
+server/target/
+client/B
+client/kelev_yam.mp3
+client/kelev yam.txt
+client/client.iml
+server/server.iml
+client/target
+client/src/main/java/bgu/spl/net/api/
+client/src/main/java/bgu/spl/net/impl/echo/
+
+
+
+
 # Generated files
 .idea/**/contentModel.xml
 
