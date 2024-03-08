@@ -7,13 +7,12 @@ import java.util.ArrayList;
 public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
 
     ArrayList<Byte> decodedBytes = new ArrayList<>();
-    Byte[] opcode = new Byte[2];
+    boolean opcodeCase = true;
     boolean endsWithZero = false;
     boolean data = false;
     boolean ack = false;
     boolean discOrDirq = false;
     boolean decoded = false;
-    boolean opcodeCase = true;
     short dataSize = 0;
 
     @Override
@@ -29,15 +28,11 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
     }
 
     public void endsWithZero(byte nextByte){
-        if(nextByte != (byte) 0){
-            decodedBytes.add(nextByte);
-        }
-        else{
+        if(nextByte == (byte) 0){
             decodedBytes.remove(decodedBytes.size() - 1);
             endsWithZero = false;
             decoded = true;
-        }
-        
+        }   
     }
 
     public void data(byte nextByte){
@@ -67,6 +62,7 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
     }
 
     public void opcode(byte nextByte){
+        Byte[] opcode = new Byte[2];
         opcode[decodedBytes.size() - 1] = nextByte;
         if(decodedBytes.size() == 2){
             opcodeCase = false;
@@ -85,6 +81,8 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
                     discOrDirq = true;
                     break;
                 default:
+                    decoded = true;
+                    decodedBytes.clear();
                     break;
             }
         }
@@ -96,6 +94,7 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
             message[i] = decodedBytes.get(i);
         decodedBytes.clear();
         decoded = false;
+        opcodeCase = true;
         return message;
     }
 

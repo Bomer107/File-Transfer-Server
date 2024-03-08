@@ -16,14 +16,14 @@ public class TftpServer {
 
         ConcurrentHashMap<String, Integer> userNames = new ConcurrentHashMap<>();
 
-        String filesPath;
+        String dirPath;
 
         if (args.length > 0){ //wants the server to work with a different directory
             try {
                 if(!Files.isDirectory(Paths.get(args[0]))){
                     throw new InvalidPathException(null, null);
                 }
-                filesPath = args[0];
+                dirPath = args[0];
             } catch (InvalidPathException | SecurityException exception) {
                 System.out.println("the argument you entered is not a valid path to a directory");
                 return;
@@ -33,10 +33,10 @@ public class TftpServer {
             Path currDirPath = Paths.get("").toAbsolutePath();
             String currDirString = currDirPath.toString();
             int lastIndexOfDirPath = currDirString.lastIndexOf("server");
-            filesPath = ((currDirString).substring(0, lastIndexOfDirPath)) + "/Flies";
+            dirPath = ((currDirString).substring(0, lastIndexOfDirPath)) + "/Flies";
         }
 
-        File filesDir = new File(filesPath);
+        File filesDir = new File(dirPath);
 
         ConcurrentHashMap<String, ReentrantReadWriteLock> fileWithLocks = new ConcurrentHashMap<>();
         File[] files = filesDir.listFiles();
@@ -47,7 +47,7 @@ public class TftpServer {
 
         Server.threadPerClient(
                 7777, //port
-                () -> new TftpProtocol(userNames, fileWithLocks), //protocol factory
+                () -> new TftpProtocol(userNames, fileWithLocks, dirPath), //protocol factory
                 TftpEncoderDecoder::new //message encoder decoder factory
                 ).serve();
     }
