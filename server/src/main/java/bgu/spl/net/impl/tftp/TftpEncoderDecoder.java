@@ -44,7 +44,6 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
 
     public void endsWithZero(byte nextByte){
         if(nextByte == (byte) 0){
-            decodedBytes.remove(decodedBytes.size() - 1);
             decoded = true;
         }   
     }

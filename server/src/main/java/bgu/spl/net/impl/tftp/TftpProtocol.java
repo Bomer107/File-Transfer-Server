@@ -1,35 +1,56 @@
 package bgu.spl.net.impl.tftp;
 
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.nio.channels.FileChannel;
+import java.nio.ByteBuffer;
 import java.io.IOException;
+
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
+
 import java.util.Collection;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import  java.util.Iterator;
 
 import bgu.spl.net.api.BidiMessagingProtocol;
 import bgu.spl.net.srv.Connections;
 
+enum State{
+    WAITING_COMMAND,
+    READ,
+    WRITE,
+    DIRQ
+}
+
 public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
     
     private Connections<byte[]> connections;
-    private final Map<String, Integer> userNames;
     private int connectionId;
 
-    private final Map<String, ReentrantReadWriteLock> files;
-    private final String dirPath;
+    private final Map<String, Integer> userNames;
     private String userName = null;
-    private int lastCommand = 0;
-    private int ackNumber = 0;
-    private List<byte[]> fileAsPackets = new LinkedList<>();
+    
+    private final Map<String, fileWithLock> files;
+
+    private fileWithLock file = null;
+
+    private final String dirPath;
+    private LinkedList<Byte> lst = null;
+    private ByteBuffer buffer = null;
+    
+    private State currState = State.WAITING_COMMAND;
+
+    private short ackNumber = -1;
+    private boolean shouldTerminate = false;
 
 
-    public TftpProtocol(Map<String, Integer> userNames, Map<String, ReentrantReadWriteLock> files, String dirPath){
+    public TftpProtocol(Map<String, Integer> userNames, Map<String, fileWithLock> files, String dirPath){
         this.userNames = userNames;
         this.files = files;
         this.dirPath = dirPath;
@@ -47,6 +68,30 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
             sendError(4);
             return;
         }
+        switch (currState) {
+            case WAITING_COMMAND:
+                command(message);
+                break;
+
+            case WRITE:
+                handleWrite(message);
+                break;
+        
+            case READ:
+                handleRead(message);
+                break;
+
+            case DIRQ:
+                handleDirq(message);
+                break;
+
+            default:
+                sendError(0, "error in the state the server was at");
+                break;
+        }
+    }
+
+    private void command(byte[] message){
         short opcode = byteToShort(message);
         if(userName == null && opcode != 7){sendError(6); return;} 
         switch (opcode) {
@@ -56,20 +101,14 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
             case 2:
                 wrq(message);
                 break;
-            case 3:
-                data(message);
-                break;
             case 4:
-                ack(message);
-                break;
-            case 5:
-                error(message);
+                ValidateAck(message, ackNumber);
                 break;
             case 6:
                 dirq();
                 break;
             case 7:
-                logeq(message);
+                logrq(message);
                 break;
             case 8:
                 delrq(message);
@@ -77,153 +116,318 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
             case 10:
                 disc();
                 break;
-        
             default:
+                sendError(4);
                 break;
             
         }
-
     }
-    private void rrq(byte[] message){
-        String fileName = decodeString(message);
-        ReentrantReadWriteLock fileLock = files.get(fileName);
 
-        if(fileLock != null){
-            fileLock.readLock().lock();
-            
-            if(files.get(fileName) != null){
-                try (FileInputStream in = new FileInputStream(dirPath + "/" + fileName);) {
 
-                    short blockNumber = 0;
-                    int dataSize = 512;
+    /*
+     * --------------------------------------------------------------------------------------------------------
+     * ------------------------------------------RRQ-----------------------------------------------------------
+     * --------------------------------------------------------------------------------------------------------
+     */
 
-                    while(dataSize == 512){
-                        ++blockNumber;
-                        byte[] fileBytes = createDataPacket(512, blockNumber);
-                        dataSize = in.read(fileBytes, 6, dataSize);
-                        if(dataSize < 512){
-                            byte[] lastFileBytes = createDataPacket(dataSize, blockNumber);
-                            System.arraycopy(fileBytes, 6, lastFileBytes, 6, dataSize);
-                            fileBytes = lastFileBytes;
-                        }
-                        fileAsPackets.add(fileBytes);
-                    }
-
-                    
-                } catch (IOException e) {
-                    System.err.println("An error occurred while reading the file: " + e.getMessage());
-                    e.printStackTrace();
-                }
-                
-            }
-            else{ 
-                sendError(1);
-                return;
-            }
-            fileLock.readLock().unlock();
-            sendData();
+     private void rrq(byte[] message){
+        String fileName = decodeString(message, 2, message.length - 3);
+        
+        if(configReader(fileName)){
+            sendData(buffer);
         }
-        else{ 
+    }
+
+    private boolean configReader(String fileName){
+        fileWithLock file = files.get(fileName);
+
+        if(file == null){
             sendError(1);
-            return;
+            return false;
+        }
+        
+        file.readLock();
+        
+        if(files.get(fileName) == null){ //means that the file was deleted while waited on the lock
+            file.readUnlock();
+            sendError(1);
+            return false;
+        }
+        
+        try(FileInputStream reader = new FileInputStream(file.getFile());
+        FileChannel fileChan = reader.getChannel();) {
+            
+            long fileSize = fileChan.size();
+            buffer = ByteBuffer.allocate((int) fileSize);
+
+            fileChan.read(buffer);
+            buffer.flip();
+
+            file.readUnlock();
+            file = null;
+        } catch (IOException error) {
+            sendError(0, "error in the file that the InputStreamGot");
+            return false;
+        }
+        ackNumber = 0;
+        currState = State.READ;
+        sendAck(ackNumber);
+        return true;
+        
+
+    }
+
+    private void handleRead(byte[] message) {
+        if(ValidateAck(message, ackNumber))
+            sendData(buffer);
+    }
+
+    private void sendData(ByteBuffer buffer){
+        int size = buffer.remaining() > 512 ? 512 : buffer.remaining(); 
+        byte[] dataPacket = new byte[6 + size];
+        prepareDataPacket(dataPacket, ++ackNumber);
+        buffer.get(dataPacket, 6, size);
+        connections.send(connectionId, dataPacket);
+
+        if(size < 512){
+            currState = State.WAITING_COMMAND;
+            buffer.clear();
+            buffer = null;
+        }   
+    }
+
+    private void prepareDataPacket(byte[] dataPacket, int blockNumber){
+        dataPacket[0] = 0; dataPacket[1] = 3;
+        STB(dataPacket, 2, dataPacket.length - 6);
+        STB(dataPacket, 4, blockNumber);
+    }
+
+    /*
+     * --------------------------------------------------------------------------------------------------------
+     * ------------------------------------------WRQ-----------------------------------------------------------
+     * --------------------------------------------------------------------------------------------------------
+     */
+
+    private void wrq(byte[] message){
+        String fileName = decodeString(message, 2, message.length - 3);
+        boolean configWriter = configWriter(fileName);
+
+        if(configWriter){
+            currState = State.WRITE;
+            ackNumber = 1;
         }
     }
-    private void wrq(byte[] message){
-        String msg = decodeString(message);
-        //if is find
-        sendError(5);
-        //else
+
+    private boolean configWriter(String fileName){
+        File currFile = new File(dirPath + "/" + fileName);
+        if(currFile.exists()){
+            sendError(5);
+            return false;
+        }
         sendAck(0);
-
+        file = new fileWithLock(new ReentrantReadWriteLock(true), currFile);
+        lst = new LinkedList<Byte>();
+        return true;
     }
-    private void data(byte[] message){
 
+    private void handleWrite(byte[] message){
+
+        if(!validateDataPacket(message))
+            return;
+
+        int dataSize = message.length - 6;
+        for(int i = 6; i < dataSize; ++i){
+            lst.add(message[i]);
+        }
+        sendAck(ackNumber++);
+
+        if(dataSize < 512){
+            createFile();
+            file = null;
+        }
     }
-    private void ack(byte[] message){
 
-        byte[] numPacket = new byte[2];
-        numPacket[0] = message[2];
-        numPacket[1] = message[3];
-        short ack = byteToShort(numPacket, 2);
+    private void createFile(){
+        file.writeLock();
+        File createFile = file.getFile();
+        String fileName = createFile.getName();
+        try {
+
+            synchronized(files){
+                if(!createFile.exists()){
+                    if(createFile.createNewFile())
+                        files.put(fileName, file);
+                        sendBcast(fileName, 1);       
+                }
+                else{
+                    file.writeUnlock();
+                    file = files.get(fileName);
+                    file.writeLock();
+                }    
+            }
+            
+            FileOutputStream writer = new FileOutputStream(createFile);
+            FileChannel fileChan = writer.getChannel();
+
+
+            fileChan.write(ByteBuffer.wrap(convertToByteArray(lst)));
+            lst = null;
+
+            file.writeUnlock();
+
+            fileChan.close();
+            writer.close();
+
+        } catch (IOException e) {
+            sendError(0, "there was an error in creating the file");
+            file.writeUnlock();
+        }
+    }
+
+    private byte[] convertToByteArray(List<Byte> lst){
+        byte[] byteArr = new byte[lst.size()];
+        Iterator<Byte> iter = lst.iterator();
+        int i = 0;
+        while(iter.hasNext()){
+            byteArr[i++] = (iter.next()).byteValue();
+        }
+        return byteArr;
+    }
+
+    /*
+     * --------------------------------------------------------------------------------------------------------
+     * ------------------------------------------ValidateAck-----------------------------------------------------------
+     * --------------------------------------------------------------------------------------------------------
+     */
+
+
+    private boolean ValidateAck(byte[] message, short ackNumber){
+
+        short ack = byteToShort(message, 2);
         
         if(ack != ackNumber){
             sendError(0, "somehow the ack number doesn't match");
-            return;
+            return false;
         }
-        else if(ackNumber == 0){
+        else if(ackNumber == -1){
             sendError(0, "isn't suppose to get ack");
-            return;
+            return false;
         }
-
-        sendData();
+        if(currState == State.WAITING_COMMAND)
+            ackNumber = -1;
+        
+        return true;
     }
 
-    private void error(byte[] message){
-        Byte[] numErrore=new Byte[2];
-        numErrore[0]=message[2];
-        numErrore[1]=message[3];
-        short b_short = ( short ) ((( short ) numErrore [0]) << 8 | ( short ) ( numErrore [1]) );
-   
-
-    }
+    /*
+     * --------------------------------------------------------------------------------------------------------
+     * ------------------------------------------dirq-----------------------------------------------------------
+     * --------------------------------------------------------------------------------------------------------
+     */
 
     private void dirq(){
+        ackNumber = 1;
         Set<String> fileNames = files.keySet();
-        String dirq = "";
-        for (String fileName : fileNames){
-            dirq += fileName + '\n';
+        LinkedList<Byte> dirq = new LinkedList<Byte>();
+        Iterator<String> iter = fileNames.iterator();
+        while(iter.hasNext()){
+            String fileName = iter.next();
+            byte[] fileBytes = stringToBytes(fileName);
+            for(byte byt : fileBytes){
+                dirq.add(byt);
+            }
+            if(iter.hasNext()){
+                dirq.add(new Byte((byte)0));
+            }
         }
-        if(!dirq.equals(""))
-            dirq = dirq.substring(0, dirq.length() - 1);
-        else{
-            dirq = "The folder is Empty";
+        buffer = ByteBuffer.allocate(dirq.size());
+        for(Byte byt : dirq){
+            buffer.put(byt.byteValue());
         }
-        connections.send(connectionId, stringToBytes(dirq));
+        sendData(buffer);
     }
 
-    private void logeq(byte[] message){
-        if(userName != null){
+    private void handleDirq(byte[] message){
+        sendData(buffer);
+    }
 
-        }
-        String name = decodeString(message);
-        Integer idOfUser = userNames.get(name);
-        if(idOfUser != connectionId){
+    /*
+     * --------------------------------------------------------------------------------------------------------
+     * ------------------------------------------logrq-----------------------------------------------------------
+     * --------------------------------------------------------------------------------------------------------
+     */
+
+    private void logrq(byte[] message){
+        if(userName != null){
             sendError(7);
         }
-  
-        //else
-        //add name to list
-        sendAck(0);
-    }
-
-    private void delrq(byte[] message){
-        String name=decodeString(message);
-        sendAck(0);
-        //if exsist
-        //delete
-        sendBcast(name,0);
-    }
-    
-    private void disc(){
-        //remove client
-        sendAck(0);
-
-    }
-
-    private String decodeString(byte[] massage){
-        return new String(massage, 2, massage.length - 2, StandardCharsets.UTF_8);
-    }
-
-    private void sendData(){
-        if(!fileAsPackets.isEmpty()){
-            byte[] msg = fileAsPackets.remove(0);
-            connections.send(connectionId, msg);
-            ++ackNumber;
+        String name = decodeString(message, 2, message.length - 3);
+        if(userNames.get(name) == null){
+            userName = name;
+            userNames.put(name, connectionId);
+            sendAck(0);
         }
         else{
-            ackNumber = 0;
+            sendError(7);
         }
-    } 
+        
+    }
+
+    /*
+     * --------------------------------------------------------------------------------------------------------
+     * ------------------------------------------delrq-----------------------------------------------------------
+     * --------------------------------------------------------------------------------------------------------
+     */
+
+    private void delrq(byte[] message){
+        String name = decodeString(message, 2, message.length - 3);
+        file = files.get(name);
+        if (file != null){
+            file.writeLock();
+            if (files.get(name) != null){
+                files.remove(name);
+                file.getFile().delete();
+                sendAck(0);
+                sendBcast(name,0);
+            }
+            else{
+                sendError(1);
+            }
+            file.writeUnlock();
+            file = null;
+        }
+        else{
+            sendError(1);
+        }
+    }
+
+    /*
+     * --------------------------------------------------------------------------------------------------------
+     * ------------------------------------------disc-----------------------------------------------------------
+     * --------------------------------------------------------------------------------------------------------
+     */
+    
+    private void disc(){
+        if(userName != null){
+            userNames.remove(userName);
+            connections.disconnect(connectionId);
+            shouldTerminate = true;
+            sendAck(0);
+        }
+        else{
+            sendError(6);
+        }
+    }
+
+    /*
+     * --------------------------------------------------------------------------------------------------------
+     * ------------------------------------------other_function-----------------------------------------------------------
+     * --------------------------------------------------------------------------------------------------------
+     */
+
+    private String decodeString(byte[] massage, int index, int length){
+        return new String(massage, index, length, StandardCharsets.UTF_8);
+    }
 
     private void sendError(int error){
         sendError(error, "");
@@ -233,6 +437,7 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
         String msg = "";
         switch (error) {
             case 0:
+                msg = "somehow the error msg you got is: ";
                 break;
             case 1:
                 msg = "error 1 - File not found";
@@ -262,47 +467,47 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
                 break;
 
             default:
-                msg = "somehow the error msg you got is" + error;
                 break;
         }
         msg += additionToError;
 
-        //encoding the error message
-        short a = 5;
-        byte[] opcode = new byte[]{(byte) (a >> 8), (byte) (a & 0xff)};
-        short b = (short)error;
-        byte[] typeOfError = new byte[]{(byte) (b >> 8), (byte) (b & 0xff)};
-        byte[] ans = stringToBytes(msg);
-        byte[] msgToSend = new byte[opcode.length + typeOfError.length + ans.length + 1];      
-        System.arraycopy(opcode, 0, msg, 0, opcode.length);
-        System.arraycopy(typeOfError, 0, msg, opcode.length, typeOfError.length);
-        System.arraycopy(ans, 0, msg, opcode.length + typeOfError.length, ans.length);
-        msgToSend[msgToSend.length - 1] = (byte) 0;
+        byte[] msgToSend = createError(error, msg);
         connections.send(connectionId, msgToSend);
     }
 
+    private static byte[] createError(int error, String msg){
+        byte[] msgBytes = stringToBytes(msg);
+        byte[] errPack = new byte[5 + msgBytes.length];
+        errPack[0] = 0; errPack[1] = 5; errPack[errPack.length - 1] = 0;
+        STB(errPack, 2, (short)error);
+        for(int i = 0; i < msgBytes.length; ++i){
+            errPack[i + 4] = msgBytes[i];
+        }
+        return errPack;
+    }
+
     private void sendAck(int numOfPacket){
-        short a = 4;
-        byte[] opcode = new byte[]{(byte) (a >> 8), (byte) (a & 0xff)};
-        short b= (short)numOfPacket;
-        byte[] numOfPacket_ = new byte[]{(byte) (b >> 8), (byte) (b & 0xff)};
-        byte[] msg = new byte[4];      
-        System.arraycopy(opcode, 0, msg, 0, 2);
-        System.arraycopy(numOfPacket_, 0, msg, 2, 2);
-        connections.send(connectionId, msg);
+        connections.send(connectionId, createAck(numOfPacket));
+    }
+
+    private byte[] createAck(int numOfPacket){
+        byte[] message = {0, 4, 0, 0};
+        STB(message, 2, (short)numOfPacket);
+        return message;
+    }
+
+    private static byte[] createBcast(String name, int sign){
+        byte[] opcode = {0, 9, (byte)sign};
+        byte[] fileName = stringToBytes(name);
+        byte[] msg = new byte[4 + fileName.length];      
+        System.arraycopy(opcode, 0, msg, 0, 3);
+        System.arraycopy(fileName, 0, msg, 3, fileName.length);
+        msg[msg.length - 1] = (byte) 0;
+        return msg;
     }
 
     private void sendBcast(String name, int sign){
-        short a = 9;
-        byte[] opcode = new byte[]{(byte) (a >> 8), (byte) (a & 0xff)};
-        byte[] sign_= new byte[]{(byte) sign};
-        byte[] fileName= stringToBytes(name);
-        byte[] msg = new byte[4 + fileName.length];      
-        System.arraycopy(opcode, 0, msg, 0, 2);
-        System.arraycopy(sign_, 0, msg, 2, 1);
-        System.arraycopy(fileName, 0, msg, 3, fileName.length);
-        msg[msg.length - 1] = (byte) 0;
-        
+        byte[] msg = createBcast(name, sign);
         Collection<Integer> ids = userNames.values();
         for (Integer id : ids){
             connections.send(id, msg);
@@ -310,23 +515,45 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
     }
     @Override
     public boolean shouldTerminate() {
-        // TODO implement this
-        throw new UnsupportedOperationException("Unimplemented method 'shouldTerminate'");
+        return shouldTerminate;
     } 
 
 
-    private byte[] stringToBytes(String msg){
+    private static byte[] stringToBytes(String msg){
         return msg.getBytes(Charset.forName("UTF-8"));
     }
 
-    public void terminate() {
-        // TODO implement this
-        throw new UnsupportedOperationException("Unimplemented method 'shouldTerminate'");
-    }
 
     private byte[] shortToByte(short number){
         byte[] fromShort = {(byte) (number >> 8), (byte) (number & 0xff)};
         return fromShort;
+    }
+
+    private static void STB(byte[] arr, int index, int number){
+        isValid(arr, index);
+        short shortNum = (short) number;
+        arr[index] = (byte)(shortNum >> 8);
+        arr[index + 1] = (byte)(shortNum & 0xff);
+    }
+/* 
+    public static void main(String[] args){
+        byte[] arr = createError(6, "User not logged in");
+        printArray(arr);
+    }
+*/
+
+    public static void printArray(byte[] arr){
+        if(arr == null){
+            System.out.println("null");
+            return;
+        }
+        System.out.print("[");
+        for(int i = 0; i < arr.length - 1; i++){
+            System.out.print(arr[i] + ", ");
+        }
+        if(arr.length > 0)
+            System.out.print(arr[arr.length - 1]);
+        System.out.println("]");
     }
 
 
@@ -334,20 +561,38 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
         return byteToShort(bytes, 0);
     }
 
-    private short byteToShort(byte[] bytes, int start){
-        short fromBytes = ( short ) (bytes [start] << 8 |  bytes [start + 1] );
+    private short byteToShort(byte[] bytes, int index){
+        isValid(bytes, index);
+        short fromBytes = ( short ) (bytes[index] << 8 |  (bytes[index + 1] & 0xff));
         return fromBytes;
     }
 
-    private byte[] createDataPacket(int dataSize, short blockNumber){
-        byte[] fileBytes = new byte[dataSize + 6];
-        fileBytes[0] = (byte) 0; fileBytes[1] = (byte) 3;
-        byte[] packetSize = shortToByte((short)dataSize);
-        fileBytes[2] = packetSize[0]; fileBytes[3] = packetSize[1];
-        byte[] blockBytes = shortToByte(blockNumber);
-        fileBytes[4] = blockBytes[0]; fileBytes[5] = blockBytes[1];
-        return fileBytes;
+    private static void isValid(byte[] arr, int index){
+        if(arr == null)
+            throw new NullPointerException("arr is null");
+        
+        if(index > arr.length - 2 || index < 0)
+            throw new IndexOutOfBoundsException("index out of bounds");
     }
 
-    
+    private boolean validateDataPacket(byte[] dataPack){
+        short opcode = byteToShort(dataPack, 0);
+        if(opcode != (short)3){
+            sendError(0, "got different packet instead of DataPacket");
+            return false;
+        }
+        short length = byteToShort(dataPack, 2);
+        if(length != (short)(dataPack.length - 6)){
+            sendError(0, "the packet size written on the packet, and the real packet size are not the same");
+            return false;
+        }
+
+        short blockNumber = byteToShort(dataPack, 4);
+        if(blockNumber != (short)ackNumber){
+            sendError(0, "the block number isn't the same as the block number that was supposed to arrive");
+            return false;
+        }
+
+        return true;
+    }
 }

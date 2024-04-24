@@ -11,7 +11,7 @@
 .idea/**/shelf
 
 .devcontainer/
-server/Flies
+server/Files
 server/src/main/java/bgu/spl/net/api
 server/src/main/java/bgu/spl/net/srv/Connections.java
 server/src/main/java/bgu/spl/net/srv/Server.java

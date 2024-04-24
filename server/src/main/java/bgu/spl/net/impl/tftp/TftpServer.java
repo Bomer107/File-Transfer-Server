@@ -1,13 +1,10 @@
 package bgu.spl.net.impl.tftp;
 import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.InvalidPathException;
+
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import bgu.spl.net.srv.ConnectionHandler;
 import bgu.spl.net.srv.Server;
 
 public class TftpServer {
@@ -17,37 +14,32 @@ public class TftpServer {
         ConcurrentHashMap<String, Integer> userNames = new ConcurrentHashMap<>();
 
         String dirPath;
+        int port = 7777;
 
-        if (args.length > 0){ //wants the server to work with a different directory
-            try {
-                if(!Files.isDirectory(Paths.get(args[0]))){
-                    throw new InvalidPathException(null, null);
-                }
-                dirPath = args[0];
-            } catch (InvalidPathException | SecurityException exception) {
-                System.out.println("the argument you entered is not a valid path to a directory");
-                return;
-            }
+        String currDir = (Paths.get("").toAbsolutePath()).toString();
+        int lastIndexOfDirPath = currDir.lastIndexOf("server");
+        if(lastIndexOfDirPath != -1)
+            dirPath = ((currDir).substring(0, lastIndexOfDirPath)) + "/Files";
+        else{
+            dirPath = currDir + "/server/Files";
         }
-        else { //works with the defult directory- Flies
-            Path currDirPath = Paths.get("").toAbsolutePath();
-            String currDirString = currDirPath.toString();
-            int lastIndexOfDirPath = currDirString.lastIndexOf("server");
-            dirPath = ((currDirString).substring(0, lastIndexOfDirPath)) + "/Flies";
-        }
+       
+        
 
         File filesDir = new File(dirPath);
-
-        ConcurrentHashMap<String, ReentrantReadWriteLock> fileWithLocks = new ConcurrentHashMap<>();
+        ConcurrentHashMap<String, fileWithLock> filesWithLocks = new ConcurrentHashMap<>();
+    
         File[] files = filesDir.listFiles();
-        for(File file: files){
-            if(file.isFile())
-                fileWithLocks.put(file.getName(), new ReentrantReadWriteLock(true));
-        }
-
+        for(File file: files)
+            if(file.isFile()){
+                fileWithLock fwl = new fileWithLock(new ReentrantReadWriteLock(true), file);
+                fwl.finished();
+                filesWithLocks.put(file.getName(), fwl);
+            }
+            
         Server.threadPerClient(
-                7777, //port
-                () -> new TftpProtocol(userNames, fileWithLocks, dirPath), //protocol factory
+                port, //7777
+                () -> new TftpProtocol(userNames, filesWithLocks, filesDir.getAbsolutePath()), //protocol factory
                 TftpEncoderDecoder::new //message encoder decoder factory
                 ).serve();
     }

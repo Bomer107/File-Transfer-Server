@@ -39,6 +39,8 @@ public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler
                 }
             }
 
+            connected = false;
+
         } catch (IOException ex) {
             ex.printStackTrace();
         }
@@ -56,16 +58,17 @@ public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler
     @Override
     public void send(T msg) {
         try {
-            if(msg != null && out != null){
+            if(connected && msg != null && out != null){
                 byte[] encodedMessege = encdec.encode(msg);
                 synchronized(sock){
-                    out.write(encodedMessege);
-                    out.flush();
+                    if(connected){
+                        out.write(encodedMessege);
+                        out.flush();
+                    }
                 }
             }
         } catch (IOException ex) {
             ex.printStackTrace();
         }
-        
     }
 }

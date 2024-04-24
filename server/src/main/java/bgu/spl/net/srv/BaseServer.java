@@ -2,18 +2,15 @@ package bgu.spl.net.srv;
 
 import bgu.spl.net.api.BidiMessagingProtocol;
 import bgu.spl.net.api.MessageEncoderDecoder;
-import bgu.spl.net.impl.tftp.TftpProtocol;
 
 import java.io.IOException;
-import bgu.spl.net.srv.Connections;
-import bgu.spl.net.srv.ConnectionsImpl;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.function.Supplier;
 
 public abstract class BaseServer<T> implements Server<T> {
 
-    private final ConnectionsImpl<T> connections;
+    private final Connections<T> connections;
     private final int port;
     private final Supplier<BidiMessagingProtocol<T>> protocolFactory;
     private final Supplier<MessageEncoderDecoder<T>> encdecFactory;
