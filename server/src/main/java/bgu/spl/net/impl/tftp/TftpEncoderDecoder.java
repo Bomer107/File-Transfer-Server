@@ -17,7 +17,7 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
     ArrayList<Byte> decodedBytes = new ArrayList<>();
     Case cas = Case.OPCODE;
     boolean decoded = false;
-    short dataSize = -5;
+    short dataSize = -7;
 
     @Override
     public byte[] decodeNextByte(byte nextByte) {
@@ -52,8 +52,8 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
         if(decodedBytes.size() == 4)
             dataSize = BTS(decodedBytes, 2);
         
-        if(dataSize == decodedBytes.size() - 4){
-            dataSize = -5;
+        if(dataSize == decodedBytes.size() - 6){
+            dataSize = -7;
             decoded = true;
         }
     }
@@ -72,7 +72,7 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
         if(decodedBytes.size() == 2){
             short opcodeShort = BTS(decodedBytes);
             switch (opcodeShort) {
-                case 1: case 5: case 7: case 8: case 9:
+                case 1: case 2: case 5: case 7: case 8: case 9:
                     cas = Case.ENDS_WITH_ZERO;
                     break;
                 case 3:
@@ -81,7 +81,7 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
                 case 4:
                     cas = Case.ACK;
                     break;
-                case 6: case 2:
+                case 6: case 10:
                     decoded = true;
                     break;
                 default:
@@ -125,7 +125,7 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
      * -------------------------------------------------------------------------------------------------
      * ------------------------------------------- FOR TESTING -----------------------------------------
      * -------------------------------------------------------------------------------------------------
-     */
+     
 
     public static void main(String[] args){
         byte[] commandData = {0x00, 0x02, 0x00, 0x1a, 0x00, 0x01, (byte) 0xd7, (byte) 0xa6 ,
@@ -140,6 +140,7 @@ public class TftpEncoderDecoder implements MessageEncoderDecoder<byte[]> {
             printArray(encdec.decodeNextByte(test[i]));
         }
     }
+    */
 
     public static void printArray(byte[] arr){
         if(arr == null){

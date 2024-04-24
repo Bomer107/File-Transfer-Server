@@ -235,15 +235,17 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
         if(!validateDataPacket(message))
             return;
 
-        int dataSize = message.length - 6;
-        for(int i = 6; i < dataSize; ++i){
+        
+        for(int i = 6; i < message.length; ++i){
             lst.add(message[i]);
         }
         sendAck(ackNumber++);
 
+        int dataSize = message.length - 6;
         if(dataSize < 512){
             createFile();
             file = null;
+            currState = State.WAITING_COMMAND;
         }
     }
 
@@ -326,10 +328,14 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
      */
 
     private void dirq(){
-        ackNumber = 1;
+
+        sendAck(0);
+        ackNumber = 0;
+
         Set<String> fileNames = files.keySet();
         LinkedList<Byte> dirq = new LinkedList<Byte>();
         Iterator<String> iter = fileNames.iterator();
+
         while(iter.hasNext()){
             String fileName = iter.next();
             byte[] fileBytes = stringToBytes(fileName);
@@ -340,10 +346,12 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
                 dirq.add(new Byte((byte)0));
             }
         }
+
         buffer = ByteBuffer.allocate(dirq.size());
         for(Byte byt : dirq){
             buffer.put(byt.byteValue());
         }
+        buffer.flip();
         sendData(buffer);
     }
 
@@ -410,9 +418,9 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
     private void disc(){
         if(userName != null){
             userNames.remove(userName);
+            sendAck(0);
             connections.disconnect(connectionId);
             shouldTerminate = true;
-            sendAck(0);
         }
         else{
             sendError(6);
