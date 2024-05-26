@@ -60,7 +60,7 @@ public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler
         try {
             if(connected && msg != null && out != null){
                 byte[] encodedMessege = encdec.encode(msg);
-                synchronized(sock){
+                synchronized(this){
                     if(connected){
                         out.write(encodedMessege);
                         out.flush();

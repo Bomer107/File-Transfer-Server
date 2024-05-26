@@ -3,13 +3,13 @@ package bgu.spl.net.impl.tftp;
 import java.io.File;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-public class fileWithLock {
+public class FileWithLock {
 
     private final ReentrantReadWriteLock RWLock;
     private final File file;
     private volatile boolean finished = false;
 
-    fileWithLock(ReentrantReadWriteLock RWLock, File file){
+    FileWithLock(ReentrantReadWriteLock RWLock, File file){
         this.RWLock = RWLock;
         this.file = file;
     }

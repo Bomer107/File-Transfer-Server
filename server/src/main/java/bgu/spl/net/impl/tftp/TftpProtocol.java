@@ -36,9 +36,9 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
     private final Map<String, Integer> userNames;
     private String userName = null;
     
-    private final Map<String, fileWithLock> files;
+    private final Map<String, FileWithLock> files;
 
-    private fileWithLock file = null;
+    private FileWithLock file = null;
 
     private final String dirPath;
     private LinkedList<Byte> lst = null;
@@ -50,7 +50,7 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
     private boolean shouldTerminate = false;
 
 
-    public TftpProtocol(Map<String, Integer> userNames, Map<String, fileWithLock> files, String dirPath){
+    public TftpProtocol(Map<String, Integer> userNames, Map<String, FileWithLock> files, String dirPath){
         this.userNames = userNames;
         this.files = files;
         this.dirPath = dirPath;
@@ -64,7 +64,7 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
 
     @Override
     public void process(byte[] message) {
-        if(message.length == 0){
+        if(message.length < 2){
             sendError(4);
             return;
         }
@@ -130,7 +130,7 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
      * --------------------------------------------------------------------------------------------------------
      */
 
-     private void rrq(byte[] message){
+    private void rrq(byte[] message){
         String fileName = decodeString(message, 2, message.length - 3);
         
         if(configReader(fileName)){
@@ -139,7 +139,7 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
     }
 
     private boolean configReader(String fileName){
-        fileWithLock file = files.get(fileName);
+        FileWithLock file = files.get(fileName);
 
         if(file == null){
             sendError(1);
@@ -225,7 +225,7 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
             return false;
         }
         sendAck(0);
-        file = new fileWithLock(new ReentrantReadWriteLock(true), currFile);
+        file = new FileWithLock(new ReentrantReadWriteLock(true), currFile);
         lst = new LinkedList<Byte>();
         return true;
     }
@@ -526,15 +526,8 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
         return shouldTerminate;
     } 
 
-
     private static byte[] stringToBytes(String msg){
         return msg.getBytes(Charset.forName("UTF-8"));
-    }
-
-
-    private byte[] shortToByte(short number){
-        byte[] fromShort = {(byte) (number >> 8), (byte) (number & 0xff)};
-        return fromShort;
     }
 
     private static void STB(byte[] arr, int index, int number){
@@ -548,7 +541,7 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
         byte[] arr = createError(6, "User not logged in");
         printArray(arr);
     }
-*/
+
 
     public static void printArray(byte[] arr){
         if(arr == null){
@@ -564,7 +557,7 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
         System.out.println("]");
     }
 
-
+*/
     private short byteToShort(byte[] bytes){
         return byteToShort(bytes, 0);
     }
