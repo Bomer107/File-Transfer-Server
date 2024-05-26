@@ -257,9 +257,10 @@ public class TftpProtocol implements BidiMessagingProtocol<byte[]>  {
 
             synchronized(files){
                 if(!createFile.exists()){
-                    if(createFile.createNewFile())
+                    if(createFile.createNewFile()){
                         files.put(fileName, file);
-                        sendBcast(fileName, 1);       
+                        sendBcast(fileName, 1);   
+                    }    
                 }
                 else{
                     file.writeUnlock();
